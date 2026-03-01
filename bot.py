@@ -37,8 +37,8 @@ def load_config() -> dict:
         with CONFIG_PATH.open() as f:
             return json.load(f)
     return {
-        "bots": {},          # {username: {token, interval, status, uptime_start, downtime_start, status_message_id}}
-        "channel_id": None,  # channel where status message is pinned
+        "bots": {},
+        "channel_id": None,
         "status_message_id": None,
     }
 
@@ -51,7 +51,6 @@ def save_config(cfg: dict) -> None:
 # ── Status helpers ────────────────────────────────────────────────────────────
 
 def fmt_duration(seconds: float) -> str:
-    """Human-readable duration."""
     seconds = int(seconds)
     d, r = divmod(seconds, 86400)
     h, r = divmod(r, 3600)
@@ -69,38 +68,44 @@ def fmt_duration(seconds: float) -> str:
 
 def build_status_text(cfg: dict) -> str:
     now = time.time()
-    lines = ["*🤖 Bot Status Dashboard*", f"_Updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC_\n"]
+    updated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        "🤖 <b>Bot Status Dashboard</b>",
+        f"<i>Updated: {updated} UTC</i>\n",
+    ]
+
     if not cfg["bots"]:
-        lines.append("No bots configured yet\\. Use /add to add one\\.")
-    for username, info in cfg["bots"].items():
-        status = info.get("status", "UNKNOWN")
-        emoji = "🟢" if status == "ACTIVE" else ("🔴" if status == "INACTIVE" else "⚪")
-        uptime_start = info.get("uptime_start")
-        downtime_start = info.get("downtime_start")
-        interval = info.get("interval", 30)
+        lines.append("No bots configured yet. Use /add to add one.")
+    else:
+        for username, info in cfg["bots"].items():
+            status = info.get("status", "UNKNOWN")
+            emoji = "🟢" if status == "ACTIVE" else ("🔴" if status == "INACTIVE" else "⚪")
+            uptime_start = info.get("uptime_start")
+            downtime_start = info.get("downtime_start")
+            interval = info.get("interval", 30)
 
-        if status == "ACTIVE" and uptime_start:
-            duration = fmt_duration(now - uptime_start)
-            state_line = f"  Uptime: `{duration}`"
-        elif status == "INACTIVE" and downtime_start:
-            duration = fmt_duration(now - downtime_start)
-            state_line = f"  Down for: `{duration}`"
-        else:
-            state_line = "  Status: `checking…`"
+            if status == "ACTIVE" and uptime_start:
+                duration = fmt_duration(now - uptime_start)
+                state_line = f"  ⏱ Uptime: <code>{duration}</code>"
+            elif status == "INACTIVE" and downtime_start:
+                duration = fmt_duration(now - downtime_start)
+                state_line = f"  ⏱ Down for: <code>{duration}</code>"
+            else:
+                state_line = "  ⏱ Status: <code>checking…</code>"
 
-        lines.append(
-            f"{emoji} *@{username}*\n"
-            f"  Status: `{status}`\n"
-            f"{state_line}\n"
-            f"  Ping interval: `{interval}s`"
-        )
+            lines.append(
+                f"{emoji} <b>@{username}</b>\n"
+                f"  Status: <code>{status}</code>\n"
+                f"{state_line}\n"
+                f"  Ping every: <code>{interval}s</code>"
+            )
+
     return "\n".join(lines)
 
 
 # ── Ping logic ────────────────────────────────────────────────────────────────
 
 async def ping_bot(token: str) -> bool:
-    """Return True if the bot responds to getMe."""
     try:
         async with Bot(token) as b:
             await asyncio.wait_for(b.get_me(), timeout=8)
@@ -110,7 +115,6 @@ async def ping_bot(token: str) -> bool:
 
 
 async def ping_loop(app: Application) -> None:
-    """Background task: ping all configured bots and update the status message."""
     while True:
         cfg = load_config()
         now = time.time()
@@ -141,7 +145,6 @@ async def ping_loop(app: Application) -> None:
                     info["downtime_start"] = now
                     info.pop("uptime_start", None)
 
-            # Seed start times if missing
             if new_status == "ACTIVE" and not info.get("uptime_start"):
                 info["uptime_start"] = now
             if new_status == "INACTIVE" and not info.get("downtime_start"):
@@ -152,7 +155,7 @@ async def ping_loop(app: Application) -> None:
         if changed:
             save_config(cfg)
 
-        # Update the pinned channel message
+        # Update pinned channel message
         channel_id = cfg.get("channel_id")
         msg_id = cfg.get("status_message_id")
         if channel_id and cfg["bots"]:
@@ -163,13 +166,13 @@ async def ping_loop(app: Application) -> None:
                         chat_id=channel_id,
                         message_id=msg_id,
                         text=text,
-                        parse_mode=ParseMode.MARKDOWN_V2,
+                        parse_mode=ParseMode.HTML,
                     )
                 else:
                     msg = await app.bot.send_message(
                         chat_id=channel_id,
                         text=text,
-                        parse_mode=ParseMode.MARKDOWN_V2,
+                        parse_mode=ParseMode.HTML,
                     )
                     cfg["status_message_id"] = msg.message_id
                     save_config(cfg)
@@ -180,23 +183,23 @@ async def ping_loop(app: Application) -> None:
             except Exception as e:
                 logger.warning(f"Could not update status message: {e}")
 
-        await asyncio.sleep(5)  # re-check every 5 s; per-bot intervals are respected above
+        await asyncio.sleep(5)
 
 
 # ── Command handlers ──────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "👋 *Ping Bot*\n\n"
-        "I monitor your Telegram bots and report their status\\.\n\n"
-        "*Commands:*\n"
-        "/add `<username> <token> [interval_seconds]` — add a bot to monitor\n"
-        "/remove `<username>` — stop monitoring a bot\n"
-        "/list — show all monitored bots\n"
-        "/status — show current status of all bots\n"
-        "/setchannel `<channel_id>` — set the channel for the status dashboard\n"
+        "👋 <b>Ping Bot</b>\n\n"
+        "I monitor your Telegram bots and report their status.\n\n"
+        "<b>Commands:</b>\n"
+        "/add <code>&lt;username&gt; &lt;token&gt; [interval_seconds]</code> — add a bot\n"
+        "/remove <code>&lt;username&gt;</code> — remove a bot\n"
+        "/list — list all monitored bots\n"
+        "/status — show current status\n"
+        "/setchannel <code>&lt;channel_id&gt;</code> — set status dashboard channel\n"
         "/help — show this message",
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -208,9 +211,9 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     args = ctx.args
     if len(args) < 2:
         await update.message.reply_text(
-            "Usage: /add `<username> <token> [interval_seconds]`\n"
-            "Example: `/add mybot 123456:ABC\\-DEF 30`",
-            parse_mode=ParseMode.MARKDOWN_V2,
+            "Usage: /add <code>&lt;username&gt; &lt;token&gt; [interval_seconds]</code>\n"
+            "Example: <code>/add mybot 123456:ABC-DEF 30</code>",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -223,11 +226,10 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Interval must be a number (seconds, minimum 10).")
         return
 
-    # Validate token
     msg = await update.message.reply_text("🔍 Validating token…")
     is_valid = await ping_bot(token)
     if not is_valid:
-        await msg.edit_text("❌ Could not reach that bot with the provided token. Please check the token and try again.")
+        await msg.edit_text("❌ Could not reach that bot with the provided token. Please check and try again.")
         return
 
     cfg = load_config()
@@ -239,14 +241,17 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     }
     save_config(cfg)
     await msg.edit_text(
-        f"✅ *@{username}* added\\! Pinging every *{interval}s*\\.",
-        parse_mode=ParseMode.MARKDOWN_V2,
+        f"✅ <b>@{username}</b> added! Pinging every <code>{interval}s</code>.",
+        parse_mode=ParseMode.HTML,
     )
 
 
 async def cmd_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not ctx.args:
-        await update.message.reply_text("Usage: /remove `<username>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(
+            "Usage: /remove <code>&lt;username&gt;</code>",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     username = ctx.args[0].lstrip("@")
@@ -266,28 +271,28 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No bots configured. Use /add to add one.")
         return
 
-    lines = ["*Monitored bots:*\n"]
+    lines = ["<b>Monitored bots:</b>\n"]
     for username, info in cfg["bots"].items():
         status = info.get("status", "UNKNOWN")
         emoji = "🟢" if status == "ACTIVE" else ("🔴" if status == "INACTIVE" else "⚪")
-        lines.append(f"{emoji} @{username} — every {info.get('interval', 30)}s")
+        lines.append(f"{emoji} @{username} — every {info.get('interval', 30)}s — <code>{status}</code>")
 
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_config()
     text = build_status_text(cfg)
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not ctx.args:
         await update.message.reply_text(
-            "Usage: /setchannel `<channel_id>`\n"
-            "Example: `/setchannel \\-1001234567890`\n\n"
-            "Make sure this bot is an admin in that channel\\.",
-            parse_mode=ParseMode.MARKDOWN_V2,
+            "Usage: /setchannel <code>&lt;channel_id&gt;</code>\n"
+            "Example: <code>/setchannel -1001234567890</code>\n\n"
+            "Make sure this bot is an admin in that channel.",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -295,21 +300,25 @@ async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     try:
         channel_id = int(channel_id_str)
     except ValueError:
-        channel_id = channel_id_str  # could be @channelusername
+        channel_id = channel_id_str
 
-    # Test we can post there
     try:
         test_msg = await ctx.bot.send_message(chat_id=channel_id, text="🔧 Setting up status dashboard…")
         await test_msg.delete()
     except Exception as e:
-        await update.message.reply_text(f"❌ Could not post to that channel: {e}\n\nMake sure I'm an admin there.")
+        await update.message.reply_text(
+            f"❌ Could not post to that channel: {e}\n\nMake sure I'm an admin there."
+        )
         return
 
     cfg = load_config()
     cfg["channel_id"] = channel_id
-    cfg["status_message_id"] = None  # force a new message
+    cfg["status_message_id"] = None
     save_config(cfg)
-    await update.message.reply_text(f"✅ Status dashboard will be posted to `{channel_id}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(
+        f"✅ Status dashboard will be posted to <code>{channel_id}</code>.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def unknown_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -334,8 +343,6 @@ def main() -> None:
     app.add_handler(CommandHandler("setchannel", cmd_setchannel))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
 
-    # Start ping loop as background job
-    app.job_queue  # ensure job queue is initialised
     async def _start_ping(app: Application) -> None:
         asyncio.create_task(ping_loop(app))
 
